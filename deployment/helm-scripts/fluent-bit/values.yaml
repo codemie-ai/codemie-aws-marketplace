@@ -15,7 +15,7 @@ fluent-bit:
     - name: AWS_REGION
       valueFrom:
         configMapKeyRef:
-          name: codemie-config
+          name: config
           key: AWS_REGION
   podAnnotations:
     fluentbit.io/exclude: "true"
@@ -32,7 +32,7 @@ fluent-bit:
       [INPUT]
           Name             tail
           Tag              kube.codemie-infra.*
-          Path             /var/log/containers/*_codemie_*.log,/var/log/containers/*_oauth2-proxy_*.log,/var/log/containers/*_security_*.log,/var/log/containers/*_elastic_*.log,/var/log/containers/*_ingress-nginx_*.log
+          Path             /var/log/containers/*_codemie_*.log,/var/log/containers/*_security_*.log,/var/log/containers/*_elastic_*.log,/var/log/containers/*_ingress-nginx_*.log
           Exclude_Path     /var/log/containers/*_fluent-bit*.log
           Parser           cri
           multiline.parser cri

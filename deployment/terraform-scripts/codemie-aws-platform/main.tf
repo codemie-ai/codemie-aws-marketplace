@@ -8,75 +8,22 @@ locals {
   cluster_name = var.platform_name
 }
 
-# data "aws_eks_cluster_auth" "cluster" {
-#   name = local.cluster_name
-#
-#   depends_on = [module.eks]
-# }
-
 ################################################################################
 # Encryption key
 ################################################################################
-
-data "aws_iam_policy_document" "ai_run_kms_key_policy" {
-  version = "2012-10-17"
-  statement {
-    sid    = "Enable IAM User Permissions"
-    effect = "Allow"
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-    actions   = ["kms:*"]
-    resources = ["*"]
-  }
-# Following policy statements are adopted from EC2 guide:
-# https://docs.aws.amazon.com/autoscaling/ec2/userguide/key-policy-requirements-EBS-encryption.html
-  statement {
-    sid    = "Allow service-linked role use of the customer managed key"
-    effect = "Allow"
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"]
-    }
-    actions = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:ReEncrypt*",
-      "kms:GenerateDataKey*",
-      "kms:DescribeKey",
-    ]
-    resources = ["*"]
-  }
-  statement {
-    sid    = "Allow attachment of persistent resources"
-    effect = "Allow"
-
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"]
-    }
-    actions = ["kms:CreateGrant"]
-    resources = ["*"]
-    condition {
-      test     = "Bool"
-      variable = "kms:GrantIsForAWSResource"
-      values   = ["true"]
-    }
-  }
-}
-
 module "ai_run_kms" {
   source  = "terraform-aws-modules/kms/aws"
-  version = "3.1.1"
+  version = "4.2.0"
 
+  region = var.region
   description                        = "AI Run key usage"
   key_usage                          = "ENCRYPT_DECRYPT"
-  enable_key_rotation                = false
+  enable_key_rotation                = true
+  rotation_period_in_days = 180
   aliases                            = ["airun-${replace(lower(local.cluster_name), "-", "")}"]
-  policy                             = data.aws_iam_policy_document.ai_run_kms_key_policy.json
-  key_administrators                 = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-  bypass_policy_lockout_safety_check = true
+
+  key_administrators                 = [var.role_arn, var.eks_admin_role_arn]
+  key_users = [module.ai_run_irsa.arn]
 
   tags = local.tags
 }
@@ -91,7 +38,7 @@ resource "aws_eip" "nat" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "5.14.0"
+  version = "6.6.1"
 
   name = var.platform_name
 
@@ -131,79 +78,36 @@ module "vpc" {
 }
 
 ################################################################################
-# NLB
+# DNS
 ################################################################################
-module "nlb" {
-  source  = "terraform-aws-modules/alb/aws"
-  version = "9.12.0"
+module "codemie_dns_public" {
+  source  = "terraform-aws-modules/route53/aws"
+  version = "6.5.0"
 
-  name = "${var.platform_name}-nlb"
+  name        = var.platform_domain_name
+  create_zone = false
 
-  load_balancer_type         = "network"
-  vpc_id                     = module.vpc.vpc_id
-  subnets                    = module.vpc.public_subnets
-  create_security_group      = false
-  security_groups            = compact(concat(tolist([module.vpc.default_security_group_id]), var.security_group_ids))
-  enable_deletion_protection = false
-
-  listeners = {
-    codemie-nats = {
-      port            = 30422
-      protocol        = "TLS"
-      certificate_arn = module.acm.acm_certificate_arn
-      forward = {
-        target_group_key = "codemie-nats"
-      }
-    }
-  }
-
-  target_groups = {
-    codemie-nats = {
-      name                 = "${var.platform_name}-nlb-codemie-nats"
-      protocol             = "TCP"
-      port                 = 30422
-      deregistration_delay = 20
-      create_attachment    = false
-      target_health_state = {
-        enable_unhealthy_connection_termination = false
-      }
-    }
-  }
-
-  tags = local.tags
-}
-
-module "record_codemie_nats" {
-  source  = "terraform-aws-modules/route53/aws//modules/records"
-  version = "4.1.0"
-
-  zone_name = var.platform_domain_name
-  records = [
-    {
-      name = "codemie-nats"
+  records = {
+    all = {
+      name = "*"
       type = "A"
       alias = {
-        name    = module.nlb.dns_name
-        zone_id = module.nlb.zone_id
+        name    = module.alb.dns_name
+        zone_id = module.alb.zone_id
       }
     }
-  ]
+  }
 }
 
 ################################################################################
 # ACM
 ################################################################################
-data "aws_route53_zone" "this" {
-  name         = var.platform_domain_name
-  private_zone = false
-}
-
 module "acm" {
   source  = "terraform-aws-modules/acm/aws"
-  version = "5.1.1"
+  version = "6.3.0"
 
   domain_name = var.platform_domain_name
-  zone_id     = data.aws_route53_zone.this.zone_id
+  zone_id     = module.codemie_dns_public.id
 
   validation_method = "DNS"
 
@@ -219,7 +123,7 @@ module "acm" {
 ################################################################################
 module "alb" {
   source  = "terraform-aws-modules/alb/aws"
-  version = "9.12.0"
+  version = "10.5.0"
 
   name = "${var.platform_name}-ingress-alb"
 
@@ -282,195 +186,103 @@ module "alb" {
   tags = local.tags
 }
 
-module "records" {
-  source  = "terraform-aws-modules/route53/aws//modules/records"
-  version = "4.1.0"
-
-  zone_name = var.platform_domain_name
-  records = [
-    {
-      name = "*"
-      type = "A"
-      alias = {
-        name    = module.alb.dns_name
-        zone_id = module.alb.zone_id
-      }
-    }
-  ]
-}
 ################################################################################
 # EKS
 ################################################################################
-module "key_pair" {
-  source  = "terraform-aws-modules/key-pair/aws"
-  version = "2.0.3"
-
-  key_name              = format("%s-%s", local.cluster_name, "key-pair")
-  private_key_algorithm = "ED25519"
-  create_private_key    = true
-
-  tags = local.tags
-}
-
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "20.26.0"
+  version = "21.24.0"
 
   enable_cluster_creator_admin_permissions = true
-  cluster_name                             = local.cluster_name
-  cluster_version                          = var.cluster_version
-  cluster_endpoint_public_access           = true
+
+  name                   = local.cluster_name
+  kubernetes_version     = var.cluster_version
+  endpoint_public_access = true
+  authentication_mode    = "API"
 
   create_iam_role               = true
   iam_role_use_name_prefix      = false
   iam_role_permissions_boundary = var.role_permissions_boundary_arn
+  enable_auto_mode_custom_tags  = false
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  create_cloudwatch_log_group                = false
-  cluster_enabled_log_types                  = []
-  create_node_security_group                 = false
-  create_cluster_primary_security_group_tags = false
+  create_cloudwatch_log_group        = true
+  enabled_log_types                  = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+  cloudwatch_log_group_retention_in_days = var.eks_cluster_log_retention_days
 
-  create_cluster_security_group = false
-  cluster_security_group_id     = module.vpc.default_security_group_id
+  create_security_group              = false
+  security_group_id                  = module.vpc.default_security_group_id
+  create_node_security_group         = false
+  create_primary_security_group_tags = false
 
-  cluster_encryption_config = {}
-
-  # Self Managed Node Group(s)
-  self_managed_node_group_defaults = {
-    subnet_ids                    = [module.vpc.private_subnets[1]] # set [module.vpc.private_subnets[1]] to deploy in eu-central-1b
-    post_bootstrap_user_data      = var.add_userdata
-    target_group_arns             = [module.alb.target_groups["http-instance"].arn, module.alb.target_groups["https-instance"].arn, module.nlb.target_groups["codemie-nats"].arn]
-    key_name                      = module.key_pair.key_pair_name
-    enable_monitoring             = false
-    use_mixed_instances_policy    = true
-    iam_role_use_name_prefix      = false
-    iam_role_permissions_boundary = var.role_permissions_boundary_arn
-    # Enable fluent-bit native CloudWatch integration
-    iam_role_additional_policies = {
-        CloudWatchAgentServerPolicy = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
-    }
-
-    block_device_mappings = {
-      xvda = {
-        device_name = "/dev/xvda"
-        ebs = {
-          volume_size           = 100
-          volume_type           = "gp3"
-          iops                  = 3000
-          throughput            = 150
-          encrypted             = var.ebs_encrypt
-          kms_key_id            = var.ebs_encrypt ? module.ai_run_kms.key_arn : null
-          delete_on_termination = true
-        }
-      }
-    }
-
-    # IAM role
-    create_iam_instance_profile = true
+  control_plane_scaling_config = {
+    tier = var.eks_control_plane_scaling_tier
   }
 
   self_managed_node_groups = {
-    worker_group_spot = {
-      name = format("%s-%s", local.cluster_name, "spot")
-
-      min_size     = var.spot_min_nodes_count
-      max_size     = var.spot_max_nodes_count
-      desired_size = var.spot_desired_nodes_count
-      ami_type     = var.ami_type
-
-      iam_role_use_name_prefix      = false
-      iam_role_permissions_boundary = var.role_permissions_boundary_arn
-
-      bootstrap_extra_args = "--kubelet-extra-args '--node-labels=node.kubernetes.io/lifecycle=spot'"
-
-      mixed_instances_policy = {
-        instances_distribution = {
-          spot_instance_pools = 2
-        }
-        override = var.spot_instance_types
-      }
-
-      # Schedulers
-      create_schedule = var.enable_spot_nodes_scheduler
-      schedules = {
-        "Start" = {
-          min_size     = var.spot_min_nodes_count
-          max_size     = var.spot_max_nodes_count
-          desired_size = var.spot_desired_nodes_count
-          recurrence   = "00 6 * * MON-FRI"
-          time_zone    = "Etc/UTC"
-        },
-        "Stop" = {
-          min_size     = 0
-          max_size     = 0
-          desired_size = 0
-          recurrence   = "00 18 * * MON-FRI"
-          time_zone    = "Etc/UTC"
-        },
-      }
-    },
     worker_group_on_demand = {
       name = format("%s-%s", local.cluster_name, "on-demand")
 
-      min_size     = var.demand_min_nodes_count
-      max_size     = var.demand_max_nodes_count
-      desired_size = var.demand_desired_nodes_count
-      ami_type     = var.ami_type
+      subnet_ids                    = module.vpc.private_subnets
+      post_bootstrap_user_data      = var.add_userdata
+      enable_monitoring             = false
+      use_mixed_instances_policy    = true
+      create_iam_instance_profile   = true
+      min_size                      = var.demand_min_nodes_count
+      max_size                      = var.demand_max_nodes_count
+      desired_size                  = var.demand_desired_nodes_count
+      ami_type                      = var.ami_type
       iam_role_use_name_prefix      = false
       iam_role_permissions_boundary = var.role_permissions_boundary_arn
 
       bootstrap_extra_args = "--kubelet-extra-args '--node-labels=node.kubernetes.io/lifecycle=normal'"
 
-      mixed_instances_policy = {
-        override = var.demand_instance_types
+      block_device_mappings = {
+        xvda = {
+          device_name = "/dev/xvda"
+          ebs = {
+            volume_size           = 30
+            volume_type           = "gp3"
+            iops                  = 3000
+            throughput            = 150
+            encrypted             = var.ebs_encrypt
+            delete_on_termination = true
+          }
+        }
       }
 
-      # Schedulers
-      create_schedule = var.enable_demand_nodes_scheduler
-      schedules = {
-        "Start" = {
-          min_size     = var.demand_min_nodes_count
-          max_size     = var.demand_max_nodes_count
-          desired_size = var.demand_desired_nodes_count
-          recurrence   = "00 6 * * MON-FRI"
-          time_zone    = "Etc/UTC"
-        },
-        "Stop" = {
-          min_size     = 0
-          max_size     = 0
-          desired_size = 0
-          recurrence   = "00 18 * * MON-FRI"
-          time_zone    = "Etc/UTC"
-        },
+      mixed_instances_policy = {
+        launch_template = {
+          override = var.demand_instance_types
+        }
       }
     },
   }
 
   # OIDC Identity provider
-  cluster_identity_providers = var.cluster_identity_providers
+  identity_providers = var.cluster_identity_providers
 
   # Addons
-  cluster_addons = {
+  addons = {
     vpc-cni = {
-      addon_version            = "v1.21.2-eksbuild.2"
-      # most_recent              = true
-      service_account_role_arn = module.vpc_cni_irsa.iam_role_arn
+      most_recent              = true
+      service_account_role_arn = module.vpc_cni_irsa.arn
+      configuration_values     = jsonencode({ enableNetworkPolicy = "true" })
     }
     aws-ebs-csi-driver = {
-      # addon_version            = "v1.60.0-eksbuild.1"
       most_recent              = true
-      service_account_role_arn = module.aws_ebs_csi_driver_irsa.iam_role_arn
+      service_account_role_arn = module.aws_ebs_csi_driver_irsa.arn
     }
     coredns = {
       most_recent = true
-      # addon_version = "v1.14.2-eksbuild.4"
     }
     kube-proxy = {
       most_recent = true
-      # addon_version = "v1.35.3-eksbuild.11"
+    }
+    metrics-server = {
+      most_recent = true
     }
   }
 
@@ -491,89 +303,23 @@ module "eks" {
   tags = local.tags
 }
 
-# module "eks_aws_auth" {
-#   source  = "terraform-aws-modules/eks/aws//modules/aws-auth"
-#   version = "20.26.0"
-#
-#   create_aws_auth_configmap = true
-#   manage_aws_auth_configmap = true
-#
-#   aws_auth_roles = var.aws_auth_roles
-#   aws_auth_users = var.aws_auth_users
-#
-#   depends_on = [module.eks]
-# }
+resource "aws_autoscaling_attachment" "self_managed_asg_to_lb" {
+  for_each = merge(
+    { for name, tg in module.alb.target_groups : "alb-${name}" => tg.arn },
+  )
 
-module "aws_ebs_csi_driver_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "5.47.1"
-
-  role_name                     = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}_EBS_CSI_Driver"
-  role_permissions_boundary_arn = var.role_permissions_boundary_arn
-  role_policy_arns = {
-    AmazonEBSCSIDriverPolicy = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-  }
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["kube-system:ebs-csi-controller-sa"]
-    }
-  }
-
-  tags = local.tags
-}
-
-module "vpc_cni_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "5.47.1"
-
-  role_name                     = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}_VPC_CNI"
-  role_permissions_boundary_arn = var.role_permissions_boundary_arn
-
-  attach_vpc_cni_policy = true
-  vpc_cni_enable_ipv4   = true
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["kube-system:aws-node"]
-    }
-  }
-  tags = local.tags
+  autoscaling_group_name = module.eks.self_managed_node_groups["worker_group_on_demand"].autoscaling_group_name
+  lb_target_group_arn    = each.value
 }
 
 data "aws_caller_identity" "current" {}
-
-module "externalsecrets_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "5.47.1"
-
-  role_name                     = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}_ExternalSecretOperatorAccess"
-  assume_role_condition_test    = "StringLike"
-  role_permissions_boundary_arn = var.role_permissions_boundary_arn
-
-  attach_external_secrets_policy = true
-  policy_name_prefix             = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}"
-  external_secrets_ssm_parameter_arns = [
-    "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/codemie/*"
-  ]
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["*"]
-    }
-  }
-  tags = local.tags
-}
 
 ################################################################################
 # S3 Storage
 ################################################################################
 module "s3_bucket" {
   source = "terraform-aws-modules/s3-bucket/aws"
-  version = "4.11.0"
+  version = "5.15.1"
 
   create_bucket = var.enable_codemie_s3_file_storage
   bucket        = "${lower(local.cluster_name)}-user-data-${data.aws_caller_identity.current.account_id}"
@@ -593,152 +339,66 @@ module "s3_bucket" {
 }
 
 ################################################################################
-# AI/Run IAM Role
+# Elasticache (Valkey aka Redis)
 ################################################################################
-data "aws_iam_policy_document" "ai_run_kms_policy" {
-  version = "2012-10-17"
 
-  statement {
-    effect = "Allow"
-    actions = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:DescribeKey"
-    ]
-    resources = [
-      "*",
-    ]
-  }
+resource "random_password" "cache_master_password" {
+  length  = 64
+  special = true
+  lower   = true
+  numeric = true
+
+  min_lower   = 5
+  min_upper   = 5
+  min_numeric = 5
+  min_special = 5
+
+  override_special = "!&#$^<>-"
 }
 
-resource "aws_iam_policy" "ai_run_kms_policy" {
-  name   = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}_AI_RUN_KMS"
-  policy = data.aws_iam_policy_document.ai_run_kms_policy.json
+module "elasticache" {
+  source  = "terraform-aws-modules/elasticache/aws"
+  version = "1.11.1"
 
-  tags = local.tags
-}
+  replication_group_id = "${var.platform_name}-cache"
 
-data "aws_iam_policy_document" "ai_run_s3_policy" {
-  version = "2012-10-17"
+  engine         = "valkey"
+  engine_version = "9.0"
+  node_type      = "cache.t4g.small"
 
-  statement {
-    sid    = "S3ObjectAccess"
-    effect = "Allow"
-    actions = [
-      "s3:PutObject",
-      "s3:GetObject"
-    ]
-    resources = [
-      "arn:aws:s3:::${module.s3_bucket.s3_bucket_id}/*",
-    ]
-  }
-}
+  transit_encryption_enabled = true
+  auth_token                 = random_password.cache_master_password.result
+  auth_token_update_strategy = "ROTATE"
+  maintenance_window         = "sun:05:00-sun:09:00"
+  apply_immediately          = true
 
-resource "aws_iam_policy" "ai_run_s3_policy" {
-  name   = "AWSIRSA_${replace(title(local.cluster_name), "-", "")}_AI_RUN_S3"
-  policy = data.aws_iam_policy_document.ai_run_s3_policy.json
-
-  tags = local.tags
-}
-
-module "ai_run_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "5.47.1"
-
-  role_name                     = "AWSIRSA_${replace(upper(local.cluster_name), "-", "")}_AI_RUN"
-  assume_role_condition_test    = "StringLike"
-  role_permissions_boundary_arn = var.role_permissions_boundary_arn
-  role_policy_arns = {
-    AIRunKMSPolicy     = aws_iam_policy.ai_run_kms_policy.arn
-    AIRunBedrockPolicy = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-    AIRunS3Policy      = aws_iam_policy.ai_run_s3_policy.arn
-  }
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["*"]
+  # Security Group
+  vpc_id = module.vpc.vpc_id
+  security_group_rules = {
+    ingress_vpc = {
+      # Default type is `ingress`
+      # Default port is based on the default engine port
+      description = "VPC traffic"
+      cidr_ipv4   = module.vpc.vpc_cidr_block
     }
   }
 
-  tags = local.tags
-}
+  # Subnet Group
+  subnet_group_name        = "${var.platform_name}-cache"
+  subnet_group_description = "Valkey replication group subnet group"
+  subnet_ids               = module.vpc.private_subnets
 
-################################################################################
-# RDS Postgres
-################################################################################
-resource "aws_security_group" "rds_security_group" {
-  name        = "${var.platform_name}-rds-sg"
-  description = "Security group for RDS PostgreSQL - allows traffic only from VPC"
-  vpc_id      = module.vpc.vpc_id
-
-  ingress {
-    description = "PostgreSQL from VPC"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [var.platform_cidr]
-  }
-
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(local.tags, {
-    Name = "${var.platform_name}-rds-sg"
-  })
-}
-
-resource "aws_db_subnet_group" "db_subnet_group" {
-  name        = "${var.platform_name}-db-subnet-group"
-  description = "Subnet group for RDS instance"
-  subnet_ids  = module.vpc.private_subnets
-
-  tags = local.tags
-}
-
-resource "random_password" "rds_master_password" {
-  length           = 16
-  special          = true
-  override_special = "!#%*()-_"
-}
-
-module "db" {
-  source     = "terraform-aws-modules/rds/aws"
-  version    = "6.13.1"
-  identifier = "${var.platform_name}-rds"
-
-  engine                   = "postgres"
-  engine_version           = "17.4"
-  engine_lifecycle_support = "open-source-rds-extended-support-disabled"
-  family                   = "postgres17"
-  storage_type             = "gp3"
-  major_engine_version     = "17.4"
-  instance_class           = var.pg_instance_class
-  maintenance_window       = "sun:02:00-sun:03:00"
-  backup_window            = "00:00-01:00"
-  backup_retention_period  = 0
-
-  allocated_storage     = 20
-  max_allocated_storage = 30
-
-  db_name  = "codemie"
-  username = "dbadmin"
-  password = random_password.rds_master_password.result
-  port     = 5432
-
-  manage_master_user_password = false
-
-  multi_az               = false
-  db_subnet_group_name   = aws_db_subnet_group.db_subnet_group.name
-  vpc_security_group_ids = [aws_security_group.rds_security_group.id]
-
-  publicly_accessible = false
-  deletion_protection = true
+  # Parameter Group
+  create_parameter_group      = true
+  parameter_group_name        = "${var.platform_name}-cache"
+  parameter_group_family      = "valkey9"
+  parameter_group_description = "Valkey replication group parameter group"
+  parameters = [
+    {
+      name  = "latency-tracking"
+      value = "yes"
+    }
+  ]
 
   tags = local.tags
 }

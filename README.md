@@ -47,12 +47,6 @@ application to Amazon EKS and related AWS services. By following these instructi
 * Configure and deploy all EPAM AI/Run™ for AWS Migration and Modernization application components by installing Helm Charts.
 * Integrate and configure Bedrock LLMs.
 
-Additionally, the EPAM AI/Run™ for AWS application supports the installation of supplementary applications that integrate with our system, such as AI TestMate or AICE.
-AI TestMate is an autonomous GenAI solution for automatic unit test generation, acting as a "virtual teammate" within the software development lifecycle (SDLC).
-The installation guide for the application can be found at [this path](deployment/add-ons/aitestmate/helm-scripts/README.md).
-AICE (AI Code Exploration) is an advanced code analysis and exploration solution.
-The installation guide for the application can be found at [this path](deployment/add-ons/aice/README.md).
-
 
 [![Walkthrough Deployment Guide](assets/Deployment_Guide.jpg)](https://youtu.be/MelxbnkoWHo)
 
@@ -118,9 +112,6 @@ EPAM AI/Run™ for AWS Migration and Modernization terraform modules will automa
 
 | EPAM AI/Run™ for AWS Migration and Modernization Component | Kubernetes APIs | Description |
 |-------------------------------|-----------------|-------------|
-| NATS                          | `Service` | NATS messaging system requires a LoadBalancer service type for client-server communication. When running `codemile-plugins`: <br>– within the same VPC as the EKS cluster – internal LoadBalancer configured for secure, private network communication<br>– outside the EKS cluster's VPC – Public LoadBalancer required for cross-network communication |
-| keycloak-operator             | `ClusterRole`, `ClusterRoleBinding`, `Role`, `RoleBinding`, `CRDs`, `CR` | Cluster-wide permissions required for managing Keycloak configuration, including realm, clients, and user federation settings |
-| Postgres-operator             | `ClusterRole`, `ClusterRoleBinding`, `CRDs`, `CR` | Cluster-wide permissions required for managing PostgreSQL instances and their lifecycle |
 | ElasticSearch                 | `Pod[securityContext]` | InitContainer must run as root user to set system parameter `vm.max_map_count=262144` |
 | All components                | `Pod[securityContext]` | All components require SecurityContext with `readOnlyRootFilesystem: false` for proper operation |
 
@@ -133,13 +124,11 @@ the deployment process (if you're using Windows, avoid mixing WSL with a native 
 <details>
 <summary>Please expand to review tools:</summary>
 
-* [terraform](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli) `v1.5.7`
+* [terraform](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli) `v1.13.5`
 * [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl)
 * [helm](https://helm.sh/docs/intro/install/)  `v3.16.0+`
 * [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 * [docker](https://docs.docker.com/get-started/get-docker/)
-* [natscli](https://github.com/nats-io/natscli?tab=readme-ov-file#installation)
-* [nsc](https://github.com/nats-io/nsc)
 * [htpasswd](https://httpd.apache.org/)
 
 </details>
@@ -169,7 +158,6 @@ Container Resources Requirements
 | Elasticsearch       | 2         | 16Gi  | 4.0 |
 | Kibana              | 1         | 1Gi   | 1.0 |
 | Mermaid-server      | 1         | 512Mi | 1.0 |
-| NATS + Auth Callout | 1 + 1     | 512Mi | 1.0 |
 | MCP Connect         | 1         | 1Gi   | 0.5 |
 | Fluentbit           | daemonset | 128Mi | 0.1 |
 
@@ -275,22 +263,14 @@ TF_VAR_role_permissions_boundary_arn="" # Example: arn:aws:iam::012345678901:pol
 # Uncomment in case Eks admin role is differ then current user
 #TF_VAR_eks_admin_role_arn=""
 
-# Uncomment in case EBS encryption needed
-#TF_VAR_ebs_encrypt="<BOOLEAN VALUE>" # Example: true or false
-
-TF_VAR_spot_instance_types='[{"instance_type":"m6a.2xlarge"}]'
-TF_VAR_spot_max_nodes_count=0
-TF_VAR_spot_desired_nodes_count=0
-TF_VAR_spot_min_nodes_count=0
 TF_VAR_demand_instance_types='[{"instance_type":"m6a.2xlarge"}]'
-TF_VAR_demand_max_nodes_count=2
+TF_VAR_demand_max_nodes_count=4
 TF_VAR_demand_desired_nodes_count=2
-TF_VAR_demand_min_nodes_count=1
+TF_VAR_demand_min_nodes_count=2
 
 # RDS
 TF_VAR_pg_instance_class="db.c6gd.medium"
 ```
-> ⚠️ **Important**: If you plan to include AI TestMate add-ons, make sure to choose instance_type m6a.2xlarge and configure no fewer than 5-7 nodes.
 
 </details>
 
@@ -303,7 +283,6 @@ TF_VAR_pg_instance_class="db.c6gd.medium"
 
    The flags `--access-key`, `--secret-key`, and `--region REGION` can be omitted if step 4.3 has already been completed.
 
-TODO: describe how to provide credentials and which profile is in use
 This bash script uses the default AWS profile for deploying the infrastructure. Ensure your default profile is properly configured with the necessary credentials and permissions before running the script.
 
 3. Run the following command if using a Unix-like operating system:
@@ -323,12 +302,12 @@ After execution, the script will:
    a. Check for required tools (kubectl, AWS CLI, Terraform)
    b. Verify AWS authentication status
    c. Validate configuration parameters
-2. Create IAM Deployer role and policy
+2. Create IAM Deployer role with minimal policies
 3. Deploy infrastructure:
-   a. Create Terraform backend storage (S3 bucket and DynamoDB table)
+   a. Create Terraform backend storage (S3 bucket)
    b. Deploy core EPAM AI/Run™ for AWS Migration and Modernization Platform infrastructure
    c. Set up necessary AWS resources
-4. Generate Outputs and save them to `deployment_outputs.env` file containing essential infrastructure details:
+4. Generate Outputs and save them to `deployment_outputs.env` file containing essential infrastructure details, for example:
 
         ```
         AWS_DEFAULT_REGION=eu-west-2
@@ -337,7 +316,7 @@ After execution, the script will:
         AWS_S3_BUCKET_NAME=codemie-platform-bucket
         AWS_RDS_ENDPOINT=database.aaaaaaaaaaa.us-east-1.rds.amazonaws.com
         AWS_RDS_DATABASE_NAME=codemie
-        AWS_RDS_DATABASE_USER=dbuser
+        AWS_RDS_DATABASE_USER=dbadmin
         AWS_RDS_DATABASE_PASSWORD=SomePassword
        ```
 
@@ -359,19 +338,9 @@ VPC contains:
 - NACLs and SGs created by Terraform modules.
 Please consider reviewing its configuration and adjust it according to your security policies.
 
-
-⚠️ Important: during the deployment several secrets are created in different namespaces for EKS cluster, only users with
+⚠️ Important: during the deployment several secrets will be created in different namespaces for EKS cluster, only users with
 proper permissions to EKS cluster can manage them: review, rotate, etc. There is no automated rotation implemented by default,
 please consider implementing it after deployment https://aws.amazon.com/blogs/containers/aws-secrets-manager-controller-poc-an-eks-operator-for-automatic-rotation-of-secrets/.
-
-⚠️ Important: The customer manged KMS key **airun-*** is created with key rotation disabled by default. If you want to
-enable it, please do it manually after the deployment https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html.
-
-This key is used for encrypt/decrypt operation for several components: secrets, EBS, RDS.
-Also, AWS KMS managed keys are created for you: ACM, S3.
-
-The resource policy attached to the keys by default contains only minimal required permissions. If you want to extend,
-please do it manually after deployment.
 
 ### 4.5.2 Manual Deployment
 If the previous step has already been completed, please proceed to skip this step.
@@ -449,10 +418,9 @@ This step will cover the following topics:
 * Create the EKS Cluster
 * Create the AWS ASGs for the EKS Cluster
 * Create the AWS ALB
-* Create the AWS NLB
 * Create the AWS KMS key to encrypt and decrypt sensitive data in the AI/Run CodeMie application.
 * Create the AWS IAM Role to access the AWS KMS and Bedrock services
-* Create the AWS IAM role ExternalSecretOperator to use AWS Systems Manager
+* Create the AWS RDS PostgreSQL instance with database
 
 To accomplish the tasks outlined above, follow these steps:
 
@@ -473,12 +441,8 @@ public_cidrs = ["10.0.12.0/24", "10.0.13.0/24", "10.0.14.0/24"]
 ssl_policy                    = "ELBSecurityPolicy-TLS-1-2-2017-01"
 eks_admin_role_arn            =  "<eks_admin_role_arn>" # Specify the ARN of the IAM role with permissions to manage the EKS cluster.
 add_userdata                  = ""
-spot_instance_types = [{ instance_type = "m6a.2xlarge" }]
-spot_max_nodes_count          = 0
-spot_desired_nodes_count      = 0
-spot_min_nodes_count          = 0
 demand_instance_types = [{ instance_type = "m6a.2xlarge" }]
-demand_max_nodes_count        = 2
+demand_max_nodes_count        = 4
 demand_desired_nodes_count    = 2
 demand_min_nodes_count        = 1
 ```
@@ -492,33 +456,11 @@ demand_min_nodes_count        = 1
         -backend-config="key=<aws_region>/codemie/platform_terraform.tfstate" \
         -backend-config="region=<aws_region>" \
         -backend-config="acl=bucket-owner-full-control" \
-        -backend-config="dynamodb_table=<dynamodb_table_name>" \
+        -backend-config="use_lockfile=true" \
         -backend-config="encrypt=true" \
 	--var-file <fileName>.tfvars
   terraform plan --var-file <fileName>.tfvars
   terraform apply --var-file <fileName>.tfvars
-```
-### 4.6.5. Terraform RDS (Deploying a database independently, instead of running it in a container, can be accomplished by following the instructions.)
-
-1. Navigate to codemie-aws-platform folder:
-   ```bash
-   cd ../codemie-aws-rds
-
-2. Review the input variables for Terraform in the deployment/terraform-scripts/codemie-aws-rds/variables.tf file and create a <filename>.tfvars in the repo to change default variables values there in a format of key-value. For example:
-```
-region                      = "<aws_region>"
-role_arn                    = "arn:aws:iam::xxxxxxxx:role/AIRunDeployerRole" # The ARN of the IAM role that will be used for deployment. Note: This value becomes available after running the terraform apply command in Step 4.6.2.
-platform_name               = "<platform_name>" # Use the value from step 4.6.4. .tfvars file
-vpc_state_bucket            = "<bucket_name>" # The value becomes available after running the terraform apply command in Step 4.6.2
-vpc_state_key               = "<aws_region>/codemie/platform_terraform.tfstate" # Replace <aws_region> before run command
-backend_lock_dynamodb_table = "<dynamodb_table_name>"  # The value becomes available after running the terraform apply command in Step 4.6.2
-...
-```
-3. Initialize the RDS and apply the changes:
-```bash
-  terraform init --var-file <filename>.tfvars
-  terraform plan --var-file <filename>.tfvars
-  terraform apply --var-file <filename>.tfvars
 ```
 </details>
 
@@ -530,7 +472,7 @@ backend_lock_dynamodb_table = "<dynamodb_table_name>"  # The value becomes avail
 
 Example of providing LLM and embedding models for the custom environment:
 
-1. Go to the `deployment/helm-scripts/codemie-api/values-aws.yaml` file
+1. Go to the `deployment/helm-scripts/codemie-api/values.yaml` file
 2. Fill the following values to create and mount custom configmap to AI/Run pod:
 
 <details>
@@ -600,7 +542,7 @@ This section describes the process of the main EPAM AI/Run™ for AWS Migration 
 
 ### 6.1.1. Core AI/Run CodeMie Components:
 
-ℹ️ EPAM AI/Run™ for AWS Migration and Modernization current versions of artifacts: **2.2.1-aws**
+ℹ️ EPAM AI/Run™ for AWS Migration and Modernization current versions of artifacts: **2.41.0-oss**
 
 <details>
 <summary> Expand the section to review all required AI/Run components:</summary>
@@ -609,7 +551,6 @@ This section describes the process of the main EPAM AI/Run™ for AWS Migration 
 |---------------|--------|-------------|
 | AI/Run CodeMie API | valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie | The backend service of the EPAM AI/Run™ for AWS Migration and Modernization application responsible for business logic, data processing, and API operations |
 | AI/Run CodeMie UI | valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie-ui | The frontend service of the EPAM AI/Run™ for AWS Migration and Modernization application that provides the user interface for interacting with the system |
-| AI/Run CodeMie Nats Auth Callout | valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie-nats-auth-callout | Authorization component of EPAM AI/Run™ for AWS Migration and Modernization Plugin Engine that handles authentication and authorization for the NATS messaging system |
 | AI/Run CodeMie MCP Connect | valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie-mcp-connect-service | A lightweight bridge tool that enables cloud-based AI services to communicate with local Model Content Protocol (MCP) servers via protocol translation while maintaining security and flexibility |
 | AI/Run Mermaid Server | valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems/mermaid-server | Implementation of open-source service that generates image URLs for diagrams based on the provided Mermaid code for workflow visualization |
 
@@ -626,13 +567,7 @@ This section describes the process of the main EPAM AI/Run™ for AWS Migration 
 | Storage Class | - | Provides persistent storage capabilities |
 | Elasticsearch |   docker.elastic.co/elasticsearch/elasticsearch:x.y.z | Database component that stores all EPAM AI/Run™ for AWS Migration and Modernization data, including datasources, projects, and other application information |
 | Kibana | docker.elastic.co/kibana/kibana:x.y.z | Web-based analytics and visualization platform that provides visualization of the data stored in Elasticsearch. Allows monitoring and analyzing EPAM AI/Run™ for AWS Migration and Modernization data |
-| Postgres-operator | registry.developers.crunchydata.com/crunchydata/postgres-operator:x.y.z | Manages PostgreSQL database instances required by other components in the stack. Handles database lifecycle operations |
-| Keycloak-operator | epamedp/keycloak-operator:x.y.z | Manages Keycloak identity and access management instance and its configuration |
-| Keycloak | docker.io/busybox:x.y.z, quay.io/keycloak/keycloak:x.y.z, registry.developers.crunchydata.com/crunchydata/crunchy-postgres:x.y.z | Identity and access management solution that provides authentication and authorization capabilities for integration with oauth2-proxy component |
-| OAuth2-Proxy | quay.io/oauth2-proxy/oauth2-proxy:x.y.z | Authentication middleware that provides secure authentication for the EPAM AI/Run™ for AWS Migration and Modernization application by integrating with Keycloak or any other IdP |
-| NATS | nnats:x.y.z, natsio/nats-server-config-reloader:x.y.z | Message broker that serves as a crucial component of the EPAM AI/Run™ for AWS Migration and Modernization Plugin Engine, facilitating communication between services |
 | FluentBit | cr.fluentbit.io/fluent/fluent-bit:x.y.z | FluentBit enables logs and metrics collection from EPAM AI/Run™ for AWS Migration and Modernization enabling the agents observability |
-| PostgreSQL | docker.io/bitnami/postgresql | Database component that stores all EPAM AI/Run™ for AWS Migration and Modernization data, including datasources, projects, and other application information |
 
 </details>
 
@@ -646,24 +581,16 @@ This section describes the process of the main EPAM AI/Run™ for AWS Migration 
    ```bash
    chmod +x helm-charts.sh
 
-3. Add the Bitnami Helm repository by running the following command:
-
-   ```bash
-   helm repo add bitnami https://charts.bitnami.com/bitnami
-   helm repo update
-   ```
-4. Run deployment script, possible flags:
-
-   `--image-repository valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`    #required flag
-
-   `--version=2.26.1;`                                              #required flag
+3. Run deployment script:
 
 ```bash
-  bash ./helm-charts.sh --version=2.2.1-aws --image-repository valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems
+  bash ./helm-charts.sh --version=2.41.0
 ```
 ```bash
-  ./helm-charts.sh --version=2.2.1-aws --image-repository valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems
+  ./helm-charts.sh --version=2.41.0
 ```
+
+To see all possible flags run script with `--help` flag set.
 
 ⚠️ **Important**: If you update ConfigMaps either manually or through a Helm upgrade, you must restart the affected pods to apply the changes. Neither manual updates nor Helm upgrades automatically restart pods, so any changes to ConfigMaps will not take effect until the pods are restarted.
 
@@ -674,12 +601,12 @@ If the previous step has already been completed, please proceed to skip this ste
 
 <summary>If you prefer to manually deploy step by step, expand this section for more instructions:</summary>
 
-### 6.3.1. Set up kubectl config and login in ecr
+### 6.3.1. Set up kubectl config and login in to ECR
 Run next command
 
 ```bash
   aws eks update-kubeconfig --region <REGION> --name <PLATFORM_NAME>
-  aws ecr get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems
+  aws ecr get-login-password --region us-east-1 | helm registry login --username AWS --password-stdin 709825985650.dkr.ecr.us-east-1.amazonaws.com/epam-systems
 ```
 
 ### 6.3.2. Nginx Ingress controller
@@ -697,7 +624,7 @@ Install only in case if your EKS cluster does not have Nginx Ingress Controller.
 ```
 3. Install ingress-nginx helm chart in created namespace:
 ```bash
-   helm upgrade --install ingress-nginx ingress-nginx/. -n ingress-nginx --values ingress-nginx/values-aws.yaml --wait --timeout 900s --dependency-update
+   helm upgrade --install ingress-nginx ingress-nginx/. -n ingress-nginx --values ingress-nginx/values.yaml --wait --timeout 900s --dependency-update
 ```
 ### 6.3.3. AWS gp3 storage class:
 
@@ -719,7 +646,7 @@ Install only in case if your EKS cluster does not have AWS gp3 storage class:
 ``` bash
    kubectl -n elastic create secret generic elasticsearch-master-credentials \
    --from-literal=username=elastic \
-   --from-literal=password="$(openssl rand -base64 12)" \
+   --from-literal=password="$(openssl rand -base64 12 | tr -d '/+=')" \
    --type=Opaque \
    --dry-run=client -o yaml | kubectl apply -f -
 ```
@@ -745,8 +672,8 @@ Secret example:
 
 ### 6.3.5. Install Kibana component:
 
-1. Fill in missing values in values-aws.yaml in `kibana/values.yaml` file:
-   a. Replace `%%DOMAIN%%` with your domain name, e.g. `example.com`. The value should be taken from the Route 53 hosted zone that was created during an earlier step of this guide.
+1. Replace `%%DOMAIN%%` with your domain name (e.g. `example.com`) in `kibana/values.yaml` file.
+   The value should be taken from the Route 53 hosted zone that was created during an earlier step of this guide or from variable `CODEMIE_DOMAIN_NAME` in the `deployment_outputs.env` file.
 
 2. Install `kibana` helm chart with the command:
 
@@ -756,310 +683,7 @@ Secret example:
    
 3. Kibana can be accessed by the following URL: https://kibana.%%DOMAIN%%, e.g https://kibana.example.com
 
-### 6.3.6. Install Postgres-operator component:
-Apply postgres-operator chart:
-
-   ```bash
-   helm upgrade --install postgres-operator postgres-operator-helm/. -n postgres-operator --create-namespace --wait --timeout 900s --dependency-update
-   ```
-
-### 6.3.9. Install AI/Run CodeMie NATS component:
-
-To deploy a NATS, follow the steps below:
-
-1. Create `codemie` namespace with the command:
-
-  ```bash
-   kubectl create namespace codemie
-   ```
-
-2. Create `codemie-nats-secrets` Kubernetes secret. To set up it, follow these steps to generate and encode the necessary values:
-   a. NATS_URL
-    * Once the NATS is deployed in the same namespace as the AI/Run CodeMie and NATS Callout services, use the internal URL `https://codemie-nats:4222`
-    * Base64 encode this URL before using it in the secret.
-   b. CALLOUT_USERNAME
-    * Use the username `callout`.
-    * Base64 encode this username before using it in the secret.
-   c. CALLOUT_PASSWORD
-    * Generate a secure password using the command: `pwgen -s -1 25`.
-    * Base64 encode this password before using it in the secret.
-   d. CALLOUT_BCRYPTED_PASSWORD
-    * Use the NATS server to generate a bcrypt-hashed password based on the `CALLOUT_PASSWORD`.
-    * Command: `nats server passwd -p <CALLOUT_PASSWORD>`
-    * Base64 encode the bcrypt-hashed password before using it in the secret.
-   e. CODEMIE_USERNAME
-    * Use the username `codemie`.
-    * Base64 encode this username before using it in the secret.
-   f. CODEMIE_PASSWORD
-    * Generate a secure password using the command: `pwgen -s -1 25`.
-    * Base64 encode this password before using it in the secret.
-   g. CODEMIE_BCRYPTED_PASSWORD
-    * Use the NATS server to generate a bcrypt-hashed password based on the `CODEMIE_PASSWORD`.
-    * Command: `nats server passwd -p <CODEMIE_PASSWORD>`
-    * Base64 encode the bcrypt-hashed password before using it in the secret.
-   h. ISSUER_NKEY and ISSUER_NSEED
-    * Use the `nsc` tool to generate NATS account keys. For example: `https://natsbyexample.com/examples/auth/nkeys/cli`
-    * Command: `nsc generate nkey account`
-    * Base64 encode the NKEY and NSEED before using them in the secret.
-   i. ISSUER_XKEY and ISSUER_XSEED
-    * Use the `nsc` tool to generate NATS curve keys. For example: `https://natsbyexample.com/examples/auth/nkeys/cli`
-    * Command: `nsc generate nkey signing`
-    * Base64 encode the XKEY and XSEED before using them in the secret.
-
-Secret example:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: codemie-nats-secrets
-type: Opaque
-data:
-  NATS_URL: <base64-encoded-nats-url>
-  CALLOUT_USERNAME: <base64-encoded-callout-username>
-  CALLOUT_PASSWORD: <base64-encoded-callout-password>
-  CALLOUT_BCRYPTED_PASSWORD: <base64-encoded-callout-bcrypted-password>
-  CODEMIE_USERNAME: <base64-encoded-codemie-username>
-  CODEMIE_PASSWORD: <base64-encoded-codemie-password>
-  CODEMIE_BCRYPTED_PASSWORD: <base64-encoded-codemie-bcrypted-password>
-  ISSUER_NKEY: <base64-encoded-issuer-nkey>
-  ISSUER_NSEED: <base64-encoded-issuer-nseed>
-  ISSUER_XKEY: <base64-encoded-issuer-xkey>
-  ISSUER_XSEED: <base64-encoded-issuer-xseed>
-```
-
-Use the following command echo -n 'your-value-here' | base64 to encode secret or use kubectl to create secret from (i.e. kubectl -n codemie create secret generic --from-literal NATS_URL=https://codemie-nats:4222 --from-literal CALLOUT_USERNAME=callout ...)
-Alternatively, a Bash script can be used
-
-```bash
-
-#!/bin/bash
-
-set -euo pipefail
-
-namespace="codemie"
-secret_name="codemie-nats-secrets"
-
-
-log_message() {
-local status="$1"
-local message="$2"
-local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-
-    case "$status" in
-        "success")
-            echo -e "[$timestamp] [OK] $message" ;;
-        "fail")
-            echo -e "[$timestamp] [ERROR] $message" ;;
-        "info")
-            echo -e "[$timestamp] $message" ;;
-        "warn")
-            echo -e "[$timestamp] [WARN] $message" ;;
-        *)
-            echo -e "[$timestamp] $message" ;;
-    esac
-}
-
-log_message "info" "Creating secret '$secret_name' in namespace '$namespace'..."
-callout_password=$(openssl rand -hex 16)
-codemie_password=$(openssl rand -hex 16)
-bcrypted_callout_password=$(htpasswd -bnBC 10 "" "${callout_password}" | tr -d ':\n' | sed 's/$2y/$2a/')
-bcrypted_codemie_password=$(htpasswd -bnBC 10 "" "${codemie_password}" | tr -d ':\n' | sed 's/$2y/$2a/')
-
-ISSUER_NKEY=""
-ISSUER_NSEED=""
-log_message "info" "Creating secret '$secret_name' in namespace '$namespace'..."
-output_nkey_account=$(nsc generate nkey --account 2>&1)
-log_message "info" "Creating secret '$secret_name' in namespace '$namespace'..."
-while IFS= read -r line; do
-if [[ $line == A* ]]; then
-ISSUER_NKEY="$line"
-log_message "info" "ISSUER_NKEY: 123456789"
-elif [[ $line == S* ]]; then
-ISSUER_NSEED="$line"
-log_message "info" "ISSUER_NKEY: asdfghjk"
-fi
-done <<< "$output_nkey_account"
-if [[ -n $ISSUER_NKEY && -n $ISSUER_NSEED ]]; then
-log_message "info" "ISSUER_NKEY: ${ISSUER_NKEY:0:8}...${ISSUER_NKEY: -8}"
-log_message "info" "ISSUER_NSEED: ${ISSUER_NSEED:0:8}...${ISSUER_NSEED: -8}"
-else
-log_message "fail" "Either ISSUER_NKEY or ISSUER_NSEED is empty."
-exit 1
-fi
-
-ISSUER_XKEY=""
-ISSUER_XSEED=""
-output_nkey_curve=$(nsc generate nkey --curve 2>&1)
-while IFS= read -r line; do
-if [[ $line == X* ]]; then
-ISSUER_XKEY="$line"
-elif [[ $line == S* ]]; then
-ISSUER_XSEED="$line"
-fi
-done <<< "$output_nkey_curve"
-if [[ -n $ISSUER_XKEY && -n $ISSUER_XSEED ]]; then
-log_message "info" "ISSUER_XKEY: ${ISSUER_XKEY:0:8}...${ISSUER_XKEY: -8}"
-log_message "info" "ISSUER_XSEED: ${ISSUER_XSEED:0:8}...${ISSUER_XSEED: -8}"
-else
-log_message "fail" "Either ISSUER_XKEY or ISSUER_XSEED is empty."
-exit 1
-fi
-
-kubectl -n "$namespace" create secret generic "$secret_name" \
---from-literal=NATS_URL="nats://codemie-nats:4222" \
---from-literal=CALLOUT_USERNAME="callout" \
---from-literal=CALLOUT_PASSWORD="${callout_password}" \
---from-literal=CALLOUT_BCRYPTED_PASSWORD="${bcrypted_callout_password}" \
---from-literal=CODEMIE_USERNAME="codemie" \
---from-literal=CODEMIE_PASSWORD="${codemie_password}" \
---from-literal=CODEMIE_BCRYPTED_PASSWORD="${bcrypted_codemie_password}" \
---from-literal=ISSUER_NKEY="${ISSUER_NKEY}" \
---from-literal=ISSUER_NSEED="${ISSUER_NSEED}" \
---from-literal=ISSUER_XKEY="${ISSUER_XKEY}" \
---from-literal=ISSUER_XSEED="${ISSUER_XSEED}" \
---type=Opaque -o yaml
-```
-
-3. Install codemie-nats helm chart in created namespace, applying custom values file with the command:
-
-```bash
-  helm repo add nats https://nats-io.github.io/k8s/helm/charts/
-  helm repo update nats
-  helm upgrade --install codemie-nats nats/nats --version 1.2.6 \
-  --namespace codemie --values ./codemie-nats/values-aws.yaml \
-  --wait --timeout 900s
-```
-
-
-ℹ️ In AWS, if TLS termination for Plugin Engine load balancer is handled by NLB (TLS certificate is on LB itself) then Plugin Engine NATS URL should start with tls protocol, for example: tls://codemie-nats.example.com:30422 , otherwise use nats://codemie-nats.example.com:30422
-
-### 6.3.10. Install AI/Run CodeMie NATS Auth Callout component:
-
-To deploy a NATS Auth Callout service, follow the steps below:
-
-1. Fill in missing values in values.yaml and Chart.yaml files in `codemie-nats-auth-callout` folder:
-   a. Replace `%%IMAGE_VERSION%%` with next value `2.2.1-aws`
-   b. Replace `%%IMAGE_REPOSITORY%%` with next value `valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`
-
-2. Install `codemie-nats-auth-callout` helm chart, applying custom values file with the command:
-
-```bash
-  helm upgrade --install codemie-nats-auth-callout codemie-nats-auth-callout/. \
-  --version "2.26.1" \
-  --namespace "codemie" \
-  -f "codemie-nats-auth-callout/values.yaml" \
-  --wait \
-  --timeout 600s \
-  --dependency-update
-```
-
-### 6.3.11. Install AI/Run CodeMie MCP Connect component:
-
-1. Fill in missing values in values.yaml and Chart.yaml files in `codemie-mcp-connect-service` folder:
-   a. Replace `%%IMAGE_VERSION%%` with next value `2.2.1-aws`
-   b. Replace `%%IMAGE_REPOSITORY%%` with next value `valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`
-
-2. Install `mcp-connect` helm chart with the command:
-
-```bash
-  helm upgrade --install codemie-mcp-connect-service codemie-mcp-connect-service/. \
-    --version 2.26.1 \
-    --namespace "codemie" \
-    -f "./codemie-mcp-connect-service/values.yaml" \
-    --wait \
-    --timeout 600s \
-    --dependency-update
-```
-
-### 6.3.12. Install PostgreSQL component:
-
-AWS RDS Database was set up previously during instruction.
-
-1. Navigate to `deployment/terraform-scripts/codemie-aws-rds` and run next command for get credentials ro RDS
-```bash
-   terraform output -raw address
-   terraform output -raw database_name
-   terraform output -raw database_user
-   terraform output -raw database_password
-```
-
-2. Create `codemie-postgresql` secret with postgresql passwords replace AWS_RDS values placeholders from 4.6.5 step
-
-```bash
-  kubectl -n "codemie" create secret generic "codemie-postgresql" \
-         --from-literal=password="${AWS_RDS_DATABASE_PASSWORD}" \
-         --from-literal=user="${AWS_RDS_DATABASE_USER}" \
-         --from-literal=db-url="${AWS_RDS_ADDRESS}" \
-         --from-literal=db-name="${AWS_RDS_DATABASE_NAME}"
-```
-
-### 6.3.13. Install AI/Run CodeMie UI component:
-
-1. Fill in missing values in values-aws.yaml and Chart.yaml files in `codemie-ui` folder:
-   a. Replace `%%IMAGE_VERSION%%` with next value `2.2.1-aws`
-   b. Replace `%%IMAGE_REPOSITORY%%` with next value `valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`
-   c. Replace `%%DOMAIN%%` with your domain name, e.g. `example.com`. The value should be taken from the Route 53 hosted zone that was created during an earlier step of this guide.
-
-2. Install `codemie-ui` helm chart in created namespace, applying custom values file with the command:
-
-```bash
-  helm upgrade --install codemie-ui codemie-ui/. \
-  --version 2.26.1 \
-  --namespace "codemie" \
-  -f "./codemie-ui/values.yaml" \
-  --wait \
-  --timeout 180s \
-  --dependency-update
-```
-
-### 6.3.14. Install AI/Run Mermaid Server component:
-1. Fill in missing values in values.yaml and Chart.yaml files in `mermaid-server` folder:
-   a. Replace `%%IMAGE_VERSION%%` with next value `2.26.1-aws`
-   b. Replace `%%IMAGE_REPOSITORY%%` with next value`valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`
-
-2. Install mermaid-server helm chart with the command:
-
-```bash
-  helm upgrade --install mermaid-server mermaid-server/. \
-  --version 2.26.1 \
-  --namespace "codemie" \
-  -f "./mermaid-server/values.yaml" \
-  --wait --timeout 600s \
-  --dependency-update
-```
-### 6.3.15. Install AI/Run CodeMie API component:
-
-1. Fill in missing values in values.yaml and Cart.yaml files in `codemie-api` folder:
-   a. Replace `%%DOMAIN%%` with your domain name, e.g. `example.com`. The value should be taken from the Route 53 hosted zone that was created during an earlier step of this guide.
-   b. Replace `%%AWS_DEFAULT_REGION%%` with your AWS region, the value becomes available after running the terraform apply command in Step 4.6.5, e.g. `us-west-2`
-   c. Replace `%%EKS_AWS_ROLE_ARN%%` with your AWS IAM Role arn, the value becomes available after running the terraform apply command in Step 4.6.5, e.g. `arn:aws:iam::0123456789012:role/AWSIRSA_AI_RUN`
-   d. Replace `%%AWS_KMS_KEY_ID%%` with your KMS Key ID, the value becomes available after running the terraform apply command in Step 4.6.5, e.g. `50f3f093-dc86-48de-8f2d-7a76e480348e`
-   e. Replace `%%AWS_S3_BUCKET_NAME%%`  The value becomes available after running the terraform apply command in Step 4.6.5
-   f. Replace `%%IMAGE_REPOSITORY%%` with next value`valid-link-to-aws-ecr.dkr.ecr.us-east-1.amazonaws.com/epam-systems`
-   g. Replace `%%IMAGE_VERSION%%` with next value `2.2.1-aws`
-
-2. Copy Elasticsearch credentials to the application namespace with the command:
-
-```bash
-
-kubectl get secret elasticsearch-master-credentials -n elastic -o yaml | sed '/namespace:d/' | kubectl apply -n codemie -f -
-```
-
-3. Install codemie-api helm chart, applying custom values file with the command:
-
-```bash
-  helm upgrade --install codemie-api codemie-api/. \
-  --version 2.26.1 \
-  --namespace "codemie" \
-  -f "./codemie-api/values.yaml"  \
-  --wait --timeout 600s \
-  --dependency-update
-```
-
-4. AI/Run CodeMie UI can be accessed by the following URL: https://codemie.%%DOMAIN%% , e.g. https://codemie.example.com
-
-### 6.3.16. Install Fluentbit component
+### 6.3.6. Install Fluentbit component
 
 If you do not have your own logging system then consider installing Fluentbit component to store historical log data.
 
@@ -1073,8 +697,13 @@ If you do not have your own logging system then consider installing Fluentbit co
 ```bash
   kubectl get secret elasticsearch-master-credentials -n elastic -o yaml | sed '/namespace:/d' | kubectl apply -n fluentbit -f -
 ```
-3. Fill in missing values in values.yaml file in `fluent-bit/values.yaml` file:
-   a. Replace `%%AWS_REGION%%` with your AWS region, the value becomes available after running the terraform apply command in Step 4.6.5, e.g. `us-west-2`
+
+3. Create config map with name `config`, take the value of `AWS_DEFAULT_REGION` from `deployment_outputs.env` file:
+
+```bash
+  kubectl -n fluentbit create configmap "config" \
+    --from-literal=AWS_REGION="$AWS_DEFAULT_REGION"
+```
 
 4. Install fluentbit with the command:
 ```bash
@@ -1082,6 +711,136 @@ If you do not have your own logging system then consider installing Fluentbit co
 ```
 
 </details>
+
+### 6.3.7. Install AI/Run CodeMie MCP Connect component:
+
+To deploy MCP Connect service, execute the following script replacing exported values by your custom if needed:
+
+```bash
+export IMAGE_REPOSITORY="709825985650.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie-mcp-connect-service"
+export HELM_REPOSITORY="oci://$IMAGE_REPOSITORY"
+export CODEMIE_VERSION="2.41.0"
+
+helm upgrade --install codemie-mcp-connect-service "$HELM_REPOSITORY" \
+    --version "${CODEMIE_VERSION}" \
+    --namespace "codemie" \
+    --set "image.repository=$IMAGE_REPOSITORY" \
+    --set "image.tag=$CODEMIE_VERSION-oss" \
+    --wait \
+    --timeout 600s \
+    --dependency-update
+```
+
+### 6.3.8. Install AI/Run Mermaid Server component:
+
+To deploy Mermaid Server component, execute the following script replacing exported values by your custom if needed:
+
+```bash
+export IMAGE_REPOSITORY="709825985650.dkr.ecr.us-east-1.amazonaws.com/epam-systems/mermaid-server"
+export HELM_REPOSITORY="oci://$IMAGE_REPOSITORY"
+export CODEMIE_VERSION="2.41.0"
+
+helm upgrade --install mermaid-server "$HELM_REPOSITORY" \
+    --version "${CODEMIE_VERSION}" \
+    --namespace "codemie" \
+    --set "image.repository=$IMAGE_REPOSITORY" \
+    --set "image.tag=$CODEMIE_VERSION-oss" \
+    -f "./mermaid-server/values.yaml" \
+    --wait \
+    --timeout 600s \
+    --dependency-update
+```
+
+### 6.3.9. Install AI/Run CodeMie UI component:
+
+To deploy CodeMie UI component, execute the following script replacing exported values by your custom if needed:
+
+```bash
+export IMAGE_REPOSITORY="709825985650.dkr.ecr.us-east-1.amazonaws.com/epam-systems/codemie-ui"
+export HELM_REPOSITORY="oci://$IMAGE_REPOSITORY"
+export CODEMIE_VERSION="2.41.0"
+export CODEMIE_DOMAIN=$CODEMIE_DOMAIN_NAME  # Taken from `deployment_outputs.env` file
+
+helm upgrade --install codemie-ui "$HELM_REPOSITORY" \
+    --version "${CODEMIE_VERSION}" \
+    --namespace "codemie" \
+    -f "./codemie-ui/values.yaml" \
+    --set "image.repository=$IMAGE_REPOSITORY" \
+    --set "image.tag=$CODEMIE_VERSION-oss" \
+    --set "viteApiUrl=https://codemie.$CODEMIE_DOMAIN/code-assistant-api" \
+    --set "ingress.host=codemie.$CODEMIE_DOMAIN" \
+    --wait \
+    --timeout 600s \
+    --dependency-update
+```
+
+### 6.3.10. Install AI/Run CodeMie API component:
+
+1. Create secret with PostgreSQL properties taking actual values from `deployment_outputs.env` file:
+
+```bash
+   kubectl -n codemie create secret generic "codemie-postgresql" \
+      --from-literal=password="${AWS_RDS_DATABASE_PASSWORD}" \
+      --from-literal=user="${AWS_RDS_DATABASE_USER}" \
+      --from-literal=db-url="${AWS_RDS_ADDRESS}" \
+      --from-literal=db-name="${AWS_RDS_DATABASE_NAME}"
+```
+
+2. Create config map with generic properties taking actual values from `deployment_outputs.env` file:
+
+```bash
+  kubectl -n "$namespace" create configmap "codemie-config" \
+      --from-literal=AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
+      --from-literal=AWS_KMS_KEY_ID="$AWS_KMS_KEY_ID" \
+      --from-literal=AWS_S3_BUCKET_NAME="$AWS_S3_BUCKET_NAME" \
+      --from-literal=AWS_S3_REGION="$AWS_S3_BUCKET_REGION" \
+      --from-literal=CODEMIE_DOMAIN_NAME="$CODEMIE_DOMAIN_NAME" 
+```
+
+3. Create secret with access properties:
+
+```bash
+  private_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048)
+  public_key=$(echo "$private_key" | openssl rsa -pubout)
+  
+  kubectl -n "$namespace" create secret generic "codemie-access" \
+      --from-literal=email="admin@codemie.ai" \
+      --from-literal=password="$(openssl rand -base64 18)" \
+      --from-literal=jwt_private.pem="$private_key" \
+      --from-literal=jwt_public.pem="$public_key" \
+      --type=Opaque
+```
+
+4. Copy Elasticsearch credentials to the application namespace with the command:
+
+```bash
+  kubectl get secret "$secret_name" -n elastic -o yaml | \
+     sed '/namespace:/d' | \
+     sed '/creationTimestamp:/d' | \
+     sed '/resourceVersion:/d' | \
+     sed '/uid:/d' | \
+     kubectl apply -n "$namespace" -f -
+```
+
+5. Patch copied secret to establish certificate trust:
+
+```bash
+ca_subject_hash=$(kubectl -n codemie get secret "elasticsearch-master-certs" -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -subject_hash)
+kubectl -n codemie patch secret elasticsearch-master-certs -p "{\"stringData\":{\"ca.hash\":\"$ca_subject_hash\"}}"
+```
+
+6. Install codemie-api helm chart, applying custom values file with the command:
+
+```bash
+  helm upgrade --install codemie-api codemie-api/. \
+  --version 2.26.1 \
+  --namespace "codemie" \
+  -f "./codemie-api/values.yaml"  \
+  --wait --timeout 600s \
+  --dependency-update
+```
+
+7. AI/Run CodeMie UI can be accessed by the following URL: https://codemie.%%DOMAIN%% , e.g. https://codemie.example.com
 
 # 7. Provide access to the application
 
@@ -1118,19 +877,27 @@ If you do not have your own logging system then consider installing Fluentbit co
 
 <img src="assets/deployment-guide/load_balancer_7_2_4.png">
 
-# 8. Post-installation configuration
+# 8. User Management
 
-Before onboarding users, a few additional configuration steps are required:
+## 8.1. Super Admin User
 
-# 8. Cost Management
+A super admin user is automatically created by the `helm-charts.sh` script during components deployment. The credentials (username and password) are printed to stdout on each execution of the script. Retrieve them from the deployment output or from the script logs.
+
+## 8.2. Onboarding Additional Users
+
+To create additional users, they must self-register through the application's registration form available at the login page. Any user who registers this way is granted limited privileges by default — they have access only to their personal project and cannot manage platform-wide settings or other users' resources.
+
+To manage project access for additional users, refer to the [User Management](https://docs.codemie.ai/user-guide/project-user-management/users/) documentation.
+
+# 9. Cost Management
 
 Please carefully review all billable services (depicted on deployment diagram) and their pricing [here](https://aws.amazon.com/pricing/).
 The product listed on AWS Marketplace is free, but usage incurs costs associated with the AWS services it utilizes. It is recommended to review the pricing details of these services to understand potential costs.
 
-# 9. Monitoring and Recovery
+# 10. Monitoring and Recovery
 
 EPAM AI/Run™ for AWS Migration and Modernization application uses built-in AWS services monitoring and alerting
-capabilities. Please refer to the following documentation for more details:
+capabilities.
 All logs are aggregated and published into AWS CloudWatch, categorized based on their importance:
 ``
    "*-important"
@@ -1139,10 +906,10 @@ All logs are aggregated and published into AWS CloudWatch, categorized based on 
 Please consider setup alerts after the deployment.
 By default, EBS snapshots are enabled for ``*-on-demand-*`` EBS volumes. You can disable this functionality after deployment.
 
-The user data is stored in AWS RDS and AWS EBS, AWs S3 services. You can use launch templates "worker_group_on_demand-*", "worker_group_spot-*" created during deployment to restore the environment in case of failure.
+The user data is stored in AWS RDS, EBS, and AWS S3 services. You can use launch templates "worker_group_on_demand-*" created during deployment to restore the environment in case of failure.
 More information about potential [issues](https://docs.aws.amazon.com/eks/latest/userguide/troubleshooting.html).
 
-# 10. Maintenance
+# 11. Maintenance
 This guide relies on valid AWS credentials with sufficient permissions to create and manage resources.
 Users are responsible for keeping their credentials secure and up to date. We strongly recommend enabling credential rotation
 for enhanced security. Refer to the AWS documentation on credential rotation: [Rotate Your Secrets with AWS Secrets Manager](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotate-secrets_turn-on-cli.html)
@@ -1157,7 +924,7 @@ The EC2 instances for the node groups use the AWS AMI version amazon-eks-node-al
 [AWS Systems Manager Patch Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/patch-manager.html).
 
 
-# 11. Support
+# 12. Support
 This is a version for educational exploration, provided free of charge, relying on community-based assistance.
 For deploying enterprise-grade versions and professional help with building custom-tailored AI solutions,
 contact EPAM Systems - SupportAIRunforAWS@epam.com or [EPAM Systems Contacts](https://www.epam.com/services/artificial-intelligence/epam-ai-run-tm#contact).

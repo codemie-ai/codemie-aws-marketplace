@@ -5,7 +5,7 @@ output "region" {
 
 output "codemie_aws_role_arn" {
   description = "The ARN of the IAM role that have access to the AWS KMS key and AWS Bedrock"
-  value       = module.ai_run_irsa.iam_role_arn
+  value       = module.ai_run_irsa.arn
 }
 
 output "codemie_kms_key_id" {
@@ -38,10 +38,6 @@ output "codemie_vpc_default_sg_id" {
   value       = module.vpc.default_security_group_id
 }
 
-output "codemie_ecr" {
-  value = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${var.platform_name}"
-}
-
 output "rds_address" {
   description = ""
   value       = module.db.db_instance_address
@@ -63,3 +59,13 @@ output "rds_database_password" {
   value       = random_password.rds_master_password.result
   sensitive   = true
 }
+
+output "codemie_cache_endpoint" {
+  value = module.elasticache.replication_group_primary_endpoint_address
+}
+
+output "codemie_cache_secret" {
+  value     = random_password.cache_master_password.result
+  sensitive = true
+}
+

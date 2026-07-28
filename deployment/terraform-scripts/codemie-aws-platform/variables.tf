@@ -61,7 +61,7 @@ variable "ssl_policy" {
 variable "cluster_version" {
   description = "EKS cluster version"
   type        = string
-  default     = "1.35"
+  default     = "1.36"
 }
 
 variable "role_permissions_boundary_arn" {
@@ -79,39 +79,7 @@ variable "add_userdata" {
 variable "ebs_encrypt" {
   description = "Specifies whether the EBS volume should be encrypted."
   type        = bool
-  default     = false
-
-}
-
-# Variables for spot pool
-variable "spot_instance_types" {
-  description = "AWS instance type to build nodes for spot pool"
-  type        = list(any)
-  default     = [{ instance_type = "m6a.2xlarge" }]
-}
-
-variable "spot_max_nodes_count" {
-  description = "The maximum size of the spot autoscaling group"
-  type        = number
-  default     = 0
-}
-
-variable "spot_desired_nodes_count" {
-  description = "The number of spot Amazon EC2 instances that should be running in the autoscaling group"
-  type        = number
-  default     = 0
-}
-
-variable "spot_min_nodes_count" {
-  description = "The minimum size of the spot autoscaling group"
-  type        = number
-  default     = 0
-}
-
-variable "enable_spot_nodes_scheduler" {
-  description = "Use this variable in case you would like to create schedule for scaling out your cluster in defined time."
-  type        = bool
-  default     = false
+  default     = true
 }
 
 # Variables for on-demand pool
@@ -139,10 +107,28 @@ variable "demand_min_nodes_count" {
   default     = 2
 }
 
-variable "enable_demand_nodes_scheduler" {
+variable "workers_schedule_enabled" {
   description = "Use this variable in case you would like to create schedule for scaling out your cluster in defined time."
   type        = bool
   default     = false
+}
+
+variable "workers_schedule_timezone" {
+  description = "Timezone for EKS workers schedule"
+  type        = string
+  default     = "Etc/UTC"
+}
+
+variable "workers_schedule_stop_recurrence" {
+  description = "Cron expression for when to stop EKS workers (scale down to 0). Format: 'MM HH * * DAY' in UTC"
+  type        = string
+  default     = "00 18 * * MON-FRI"
+}
+
+variable "workers_schedule_start_recurrence" {
+  description = "Cron expression for when to start EKS workers (scale up). Format: 'MM HH * * DAY' in UTC"
+  type        = string
+  default     = "00 6 * * MON-FRI"
 }
 
 # OIDC Identity provider
@@ -152,29 +138,26 @@ variable "cluster_identity_providers" {
   default     = {}
 }
 
-variable "aws_auth_users" {
-  description = "List of user maps to add to the aws-auth configmap"
-  type = list(object({
-    userarn  = string
-    username = string
-    groups   = list(string)
-  }))
-  default = []
-}
-
-variable "aws_auth_roles" {
-  description = "List of role maps to add to the aws-auth configmap"
-  type = list(object({
-    rolearn  = string
-    username = string
-    groups   = list(string)
-  }))
-  default = []
-}
-
 variable "eks_admin_role_arn" {
   description = "ARN of the IAM role that will have admin access to the EKS cluster"
   type        = string
+}
+
+variable "eks_control_plane_scaling_tier" {
+  description = "EKS Provisioned Control Plane scaling tier"
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "tier-xl", "tier-2xl", "tier-4xl", "tier-8xl"], var.eks_control_plane_scaling_tier)
+    error_message = "Invalid scaling tier name for EKS Provisioned Control Plane"
+  }
+}
+
+variable "eks_cluster_log_retention_days" {
+  description = "Number of days to retain EKS control plane CloudWatch logs (api, audit, authenticator, controllerManager, scheduler)"
+  type        = number
+  default     = 30
 }
 
 variable "tags" {
@@ -203,16 +186,4 @@ variable "pg_instance_class" {
   description = "Postgres Instance Class"
   type        = string
   default     = "db.c6gd.medium"
-}
-
-variable "aice_enabled" {
-  description = "Provision resources for AICE component"
-  type        = bool
-  default     = false
-}
-
-variable "testmate_enabled" {
-  description = "Provision resources for TestMate component"
-  type        = bool
-  default     = false
 }
