@@ -2,12 +2,11 @@
 
 set -euo pipefail
 
-AWS_RDS_ENABLE=0 # 0 means true for wider compatibility
-
 # Detect the absolute path of the current script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 LOG_FILE="$SCRIPT_DIR/logs/codemie_helm_deployment_$(date +%Y-%m-%d-%H%M%S).log"
 CODEMIE_NAMESPACE="codemie"
+AWS_ECR_MARKETPLACE="709825985650.dkr.ecr.us-east-1.amazonaws.com/epam-systems"
 
 if [ ! -d "$SCRIPT_DIR/logs" ]; then
     mkdir "$SCRIPT_DIR/logs"
@@ -39,10 +38,12 @@ log_message() {
 
 display_usage() {
     echo "Usage: $0 [options]"
-    echo "Options:"
-    echo "  -h, --help                 Display this help message"
+    echo "OPTIONS:"
+    echo "  -h, --help                 Display this help message and exit"
+    echo "  -v, --version              AI/Run CodeMie version to deploy (e.g. 2.41.0)"
+    echo "  -r, --registry             AWS ECR repository from where install Helm charts and deploy images. Optional"
     echo "Examples:"
-    echo "$0 --version=0.21.0 --registry=000000000000.dkr.ecr.us-east-1.amazonaws.com/ai-run"
+    echo "$0 --version 2.41.0"
     exit 1
 }
 
@@ -75,7 +76,6 @@ check_helm(){
     fi
 }
 
-# TODO: Check passing repository address
 verify_inputs() {
     ai_run_version=""
     image_repository=""
@@ -84,13 +84,16 @@ verify_inputs() {
     while [[ $# -gt 0 ]]
     do
         case $1 in
-            --version=*)
-                ai_run_version="${1#*=}"
-                shift
+            --version|-v)
+                ai_run_version="$2"
+                shift 2
                 ;;
-            --image-repository)
+            --registry|-r)
                 image_repository="$2"
                 shift 2
+                ;;
+            --help|-h)
+                display_usage
                 ;;
             *)
                 log_message "fail" "Unknown option: $1"
@@ -104,14 +107,11 @@ verify_inputs() {
         display_usage
     fi
 
-    if [[ -z "$image_repository" ]]; then
-      if [[ -z "$AWS_ECR_REPOSITORY" ]]; then
-        log_message "fail" "image repository is not set."
-        display_usage
-      else
-        log_message "info" "Ysing provisioned ECR: $AWS_ECR_REPOSITORY"
-        image_repository=$AWS_ECR_REPOSITORY
-      fi
+    if [[ -n "$image_repository" ]]; then
+      log_message "info" "Using custom ECR: $image_repository"
+    else
+      log_message "info" "Using marketplace ECR: $AWS_ECR_MARKETPLACE"
+      image_repository=$AWS_ECR_MARKETPLACE
     fi
 }
 
@@ -135,6 +135,13 @@ verify_aws_login() {
     log_message "info" "Account ID: $current_account"
     log_message "info" "User ARN: $current_user"
     log_message "info" ""
+}
+
+helm_registry_login() {
+  local ecr_region=""
+  ecr_region=$(echo "$image_repository" | sed 's/.*\.ecr\.\([^.]*\)\.amazonaws\.com.*/\1/')
+
+  aws ecr get-login-password --region $ecr_region | helm registry login --username AWS --password-stdin "${image_repository%/*}"
 }
 
 check_and_create_namespace() {
@@ -182,36 +189,6 @@ check_k8s_configmap_exists() {
   fi
 }
 
-# TODO: Remove
-create_docker_registry_secret() {
-    local namespace="$1"
-    local secret_name="$2"
-
-    key_path="$SCRIPT_DIR/key.json"
-    if [ -f "$key_path" ]; then
-        log_message "info" "The key.json file exists."
-    else
-        log_message "fail" "The key.json file does not exist."
-        exit 1
-    fi
-
-    log_message "info" "Creating secret '${secret_name}' in namespace '${namespace}'..."
-    kubectl create secret docker-registry "${secret_name}" \
-      --docker-server=https://europe-west3-docker.pkg.dev \
-      --docker-email=gsa-to-gcr@or2-msq-epmd-edp-anthos-t1iylu.iam.gserviceaccount.com \
-      --docker-username=_json_key \
-      --docker-password="$(cat key.json)" \
-      --namespace "${namespace}" > /dev/null
-
-    # shellcheck disable=SC2181
-    if [ $? -eq 0 ]; then
-        log_message "success" "Secret '${secret_name}' created successfully."
-    else
-        log_message "fail" "Failed to create secret '${secret_name}'."
-        exit 1
-    fi
-}
-
 check_env_vars() {
     local missing_vars=0
 
@@ -235,6 +212,9 @@ load_deployment_env() {
       set -a
       source "$OUTPUT_FILE"
       set +a
+  else
+      log_message "fail" "Can not locate 'deployment_outputs.env' file"
+      exit 1
   fi
 }
 
@@ -258,19 +238,6 @@ print_summary() {
 ###################
 # Deployment Steps
 ###################
-
-# TODO: Remove
-deploy_codemie_docker_registry_secret() {
-    local namespace="$1"
-    local secret_name="$2"
-
-    check_and_create_namespace "$namespace"
-
-    if ! check_k8s_secret_exists "$namespace" "$secret_name"; then
-        create_docker_registry_secret "$namespace" "$secret_name"
-    fi
-}
-
 deploy_storage_class() {
   log_message "info" "Deploying Storage Class ..."
   kubectl apply -f "storage-class/storageclass-aws-gp3.yaml" > /dev/null
@@ -376,7 +343,7 @@ deploy_kibana() {
 }
 
 deploy_fluent_bit() {
-    local namespace="fluent-bit"
+    local namespace="fluentbit"
     local values_file="./fluent-bit/values.yaml"
 
     log_message "info" "Starting FluentBit deployment"
@@ -393,8 +360,8 @@ deploy_fluent_bit() {
         fi
     fi
 
-    if ! check_k8s_configmap_exists "$namespace" "codemie-config"; then
-      kubectl -n "$namespace" create configmap "codemie-config" \
+    if ! check_k8s_configmap_exists "$namespace" "config"; then
+      kubectl -n "$namespace" create configmap "config" \
         --from-literal=AWS_REGION="$AWS_DEFAULT_REGION" \
         > /dev/null
     fi
@@ -531,12 +498,26 @@ deploy_codemie_api() {
       fi
     fi
 
+    if ! check_k8s_secret_exists "$namespace" "codemie-cache"; then
+      kubectl -n "$namespace" create secret generic "codemie-cache" \
+        --from-literal=endpoint="${AWS_CACHE_ENDPOINT}" \
+        --from-literal=secret="${AWS_CACHE_SECRET}" \
+        --type=Opaque > /dev/null
 
-    # Generate password for Super Admin
+      # shellcheck disable=SC2181
+      if [ $? -eq 0 ]; then
+        log_message "success" "Secret 'codemie-cache' created successfully."
+      else
+        log_message "fail" "Failed to create secret 'codemie-cache'."
+        exit 1
+      fi
+    fi
+
+    # Generate password for Sup
     if ! check_k8s_secret_exists "$namespace" "codemie-access"; then
       # Generate RSA KeyPair
-      local private_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048)
-      local public_key=$(echo "$private_key" | openssl rsa -pubout)
+      local private_key=$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)
+      local public_key=$(echo "$private_key" | openssl rsa -pubout 2>/dev/null)
 
       kubectl -n "$namespace" create secret generic "codemie-access" \
         --from-literal=email="admin@codemie.ai" \
@@ -553,38 +534,6 @@ deploy_codemie_api() {
         exit 1
       fi
     fi
-
-    if ! check_k8s_secret_exists "$namespace" "codemie-redis"; then
-      kubectl -n "$namespace" create secret generic "codemie-redis" \
-        --from-literal=REDIS_HOST="${AWS_CACHE_ENDPOINT}" \
-        --from-literal=REDIS_PASSWORD="${AWS_CACHE_SECRET}" \
-        --type=Opaque > /dev/null
-
-      # shellcheck disable=SC2181
-      if [ $? -eq 0 ]; then
-        log_message "success" "Secret 'codemie-redis' created successfully."
-      else
-        log_message "fail" "Failed to create secret 'codemie-redis'."
-        exit 1
-      fi
-    fi
-
-    if ! check_k8s_secret_exists "$namespace" "codemie-secrets"; then
-      kubectl -n "$namespace" create secret generic "codemie-secrets" \
-        --from-literal=MCP_AUTH_HMAC_SECRET="$(openssl rand -hex 48)" \
-        --from-literal=MCP_AUTH_TMS_KEY_ID="$(openssl rand -hex 32)" \
-        --type=Opaque > /dev/null
-
-      # shellcheck disable=SC2181
-      if [ $? -eq 0 ]; then
-        log_message "success" "Secret 'codemie-secrets' created successfully."
-      else
-        log_message "fail" "Failed to create secret 'codemie-secrets'."
-        exit 1
-      fi
-    fi
-
-    #
 
     log_message "info" "Deploying AI/Run API Helm Chart ..."
     helm upgrade --install codemie-api "$helm_repository" \
@@ -604,137 +553,6 @@ deploy_codemie_api() {
         log_message "success" "AI/Run API deployment completed"
     else
         log_message "fail" "Failed to deploy AI/Run API."
-        exit 1
-    fi
-}
-
-deploy_nats() {
-    local namespace="codemie"
-    local secret_name="codemie-nats-secrets"
-
-    log_message "info" "Starting NATS deployment"
-
-    check_and_create_namespace "$namespace"
-
-    if ! check_k8s_secret_exists "$namespace" "$secret_name"; then
-        log_message "info" "Creating secret '$secret_name' in namespace '$namespace'..."
-        callout_password=$(openssl rand -hex 16)
-        codemie_password=$(openssl rand -hex 16)
-        # shellcheck disable=SC2016
-        bcrypted_callout_password=$(htpasswd -bnBC 10 "" "${callout_password}" | tr -d ':\n' | sed 's/$2y/$2a/')
-        # shellcheck disable=SC2016
-        bcrypted_codemie_password=$(htpasswd -bnBC 10 "" "${codemie_password}" | tr -d ':\n' | sed 's/$2y/$2a/')
-
-        ISSUER_NKEY=""
-        ISSUER_NSEED=""
-        output_nkey_account=$(nsc generate nkey --account 2>&1)
-        while IFS= read -r line; do
-            if [[ $line == A* ]]; then
-                ISSUER_NKEY="$line"
-            elif [[ $line == S* ]]; then
-                ISSUER_NSEED="$line"
-            fi
-        done <<< "$output_nkey_account"
-        if [[ -n $ISSUER_NKEY && -n $ISSUER_NSEED ]]; then
-            log_message "info" "ISSUER_NKEY: ${ISSUER_NKEY:0:8}...${ISSUER_NKEY: -8}"
-            log_message "info" "ISSUER_NSEED: ${ISSUER_NSEED:0:8}...${ISSUER_NSEED: -8}"
-        else
-            log_message "fail" "Either ISSUER_NKEY or ISSUER_NSEED is empty."
-            exit 1
-        fi
-
-        ISSUER_XKEY=""
-        ISSUER_XSEED=""
-        output_nkey_curve=$(nsc generate nkey --curve 2>&1)
-        while IFS= read -r line; do
-            if [[ $line == X* ]]; then
-                ISSUER_XKEY="$line"
-            elif [[ $line == S* ]]; then
-                ISSUER_XSEED="$line"
-            fi
-        done <<< "$output_nkey_curve"
-        if [[ -n $ISSUER_XKEY && -n $ISSUER_XSEED ]]; then
-            log_message "info" "ISSUER_XKEY: ${ISSUER_XKEY:0:8}...${ISSUER_XKEY: -8}"
-            log_message "info" "ISSUER_XSEED: ${ISSUER_XSEED:0:8}...${ISSUER_XSEED: -8}"
-        else
-            log_message "fail" "Either ISSUER_XKEY or ISSUER_XSEED is empty."
-            exit 1
-        fi
-
-        kubectl -n "$namespace" create secret generic "$secret_name" \
-          --from-literal=NATS_URL="nats://codemie-nats:4222" \
-          --from-literal=CALLOUT_USERNAME="callout" \
-          --from-literal=CALLOUT_PASSWORD="${callout_password}" \
-          --from-literal=CALLOUT_BCRYPTED_PASSWORD="${bcrypted_callout_password}" \
-          --from-literal=CODEMIE_USERNAME="codemie" \
-          --from-literal=CODEMIE_PASSWORD="${codemie_password}" \
-          --from-literal=CODEMIE_BCRYPTED_PASSWORD="${bcrypted_codemie_password}" \
-          --from-literal=ISSUER_NKEY="${ISSUER_NKEY}" \
-          --from-literal=ISSUER_NSEED="${ISSUER_NSEED}" \
-          --from-literal=ISSUER_XKEY="${ISSUER_XKEY}" \
-          --from-literal=ISSUER_XSEED="${ISSUER_XSEED}" \
-          --type=Opaque > /dev/null
-
-        # shellcheck disable=SC2181
-        if [ $? -eq 0 ]; then
-            log_message "success" "Secret '$secret_name' created successfully."
-        else
-            log_message "fail" "Failed to create secret '$secret_name'."
-            exit 1
-        fi
-    fi
-
-    log_message "info" "Deploying NATS Helm Chart ..."
-    helm repo add nats https://nats-io.github.io/k8s/helm/charts/ > /dev/null
-    helm repo update nats > /dev/null
-    helm upgrade --install codemie-nats nats/nats --version 1.3.0 \
-      --namespace $namespace --values "./codemie-nats/values.yaml" \
-      --wait --timeout 900s > /dev/null
-
-    # shellcheck disable=SC2181
-    if [ $? -eq 0 ]; then
-        log_message "success" "NATS deployment completed"
-    else
-        log_message "fail" "Failed to deploy NATS."
-        exit 1
-    fi
-}
-
-deploy_codemie_nats_callout() {
-    local ai_run_version="$1"
-    local image_repository="$2"
-    local helm_repository="oci://$image_repository/codemie-nats-auth-callout"
-
-    local namespace="codemie"
-    local secret_name="codemie-nats-secrets"
-
-    log_message "info" "Starting CodeMie NATS Callout deployment."
-
-    check_and_create_namespace "$namespace"
-
-    if ! check_k8s_secret_exists "$namespace" "$secret_name"; then
-        log_message "fail" "Failed to get secret '$secret_name'."
-        exit 1
-    fi
-
-    log_message "info" "Deploying CodeMie NATS Callout Helm Chart ..."
-
-#      -f "${values_file}" \
-
-    helm upgrade --install codemie-nats-auth-callout "$helm_repository" \
-      --version "${ai_run_version}" \
-      --namespace "$namespace" \
-      --set "image.repository=$image_repository/codemie-nats-auth-callout" \
-      --set "image.tag=$ai_run_version-oss" \
-      --wait \
-      --timeout 600s \
-      --dependency-update > /dev/null
-
-    # shellcheck disable=SC2181
-    if [ $? -eq 0 ]; then
-        log_message "success" "CodeMie NATS Callout deployment completed."
-    else
-        log_message "fail" "Failed to deploy CodeMie NATS Callout."
         exit 1
     fi
 }
@@ -820,8 +638,7 @@ main() {
     log_message "info" ""
 
     verify_aws_login
-    aws ecr get-login-password --region $AWS_DEFAULT_REGION | helm registry login --username AWS --password-stdin "${image_repository%/*}"
-
+    helm_registry_login
     configure_kubectl
 
     deploy_storage_class
@@ -830,9 +647,7 @@ main() {
     deploy_elasticsearch
     deploy_kibana "${CODEMIE_DOMAIN_NAME}"
     deploy_fluent_bit
-    deploy_nats
 
-    deploy_codemie_nats_callout "$ai_run_version" "$image_repository"
     deploy_codemie_mcp_connect_service "$ai_run_version" "$image_repository"
     deploy_mermaid_server "$ai_run_version" "$image_repository"
     deploy_codemie_ui "$ai_run_version" "$image_repository" "${CODEMIE_DOMAIN_NAME}"

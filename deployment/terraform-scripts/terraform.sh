@@ -214,7 +214,7 @@ deploy_iam_role() {
 
     cd "$TERRAFORM_DIR/codemie-aws-iam" || exit
 
-    terraform init
+    terraform init -upgrade
     terraform plan -out=tfplan
     terraform apply -auto-approve tfplan
 
@@ -237,7 +237,7 @@ deploy_terraform_backend_storage() {
 
     cd "$TERRAFORM_DIR/codemie-aws-remote-backend" || exit
 
-    terraform init
+    terraform init -upgrade
     terraform plan \
       -var="role_arn=${AWS_DEPLOYER_ROLE_ARN}" \
       -out=tfplan
@@ -285,13 +285,14 @@ deploy_core_infrastructure() {
     fi
 
     terraform apply -auto-approve tfplan
-
     local outputs=(
         "region"
         "codemie_aws_role_arn"
         "codemie_kms_key_id"
         "codemie_s3_bucket_name"
         "codemie_s3_bucket_region"
+        "codemie_cache_endpoint"
+        "codemie_cache_secret"
         "rds_address"
         "rds_database_name"
         "rds_database_user"
@@ -318,6 +319,9 @@ deploy_core_infrastructure() {
     export AWS_RDS_DATABASE_NAME="$output_rds_database_name"
     export AWS_RDS_DATABASE_USER="$output_rds_database_user"
     export AWS_RDS_DATABASE_PASSWORD="$output_rds_database_password"
+
+    export AWS_CACHE_ENDPOINT="$output_codemie_cache_endpoint"
+    export AWS_CACHE_SECRET="$output_codemie_cache_secret"
 
     log_message "info" "AWS_DEFAULT_REGION: $AWS_DEFAULT_REGION"
     log_message "info" "EKS_AWS_ROLE_ARN: $EKS_AWS_ROLE_ARN"
@@ -355,6 +359,9 @@ AWS_RDS_DATABASE_NAME="${AWS_RDS_DATABASE_NAME:-}"
 AWS_RDS_DATABASE_USER="${AWS_RDS_DATABASE_USER:-}"
 AWS_RDS_DATABASE_PASSWORD='${AWS_RDS_DATABASE_PASSWORD:-}'
 
+# Valkey Endpoint
+AWS_CACHE_ENDPOINT="${AWS_CACHE_ENDPOINT:-}"
+AWS_CACHE_SECRET='${AWS_CACHE_SECRET:-}'
 EOL
 
     chmod 600 "$output_file"
@@ -407,9 +414,7 @@ main() {
     verify_aws_login
 
     deploy_iam_role
-    sleep 20
     deploy_terraform_backend_storage
-    sleep 20
     deploy_core_infrastructure
 
     save_deployment_outputs

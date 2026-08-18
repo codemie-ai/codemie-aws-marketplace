@@ -41,28 +41,6 @@ extraEnv:
       configMapKeyRef:
         name: codemie-config
         key: AWS_S3_REGION
-  # NATS Configuration
-  - name: NATS_PLUGIN_KEY_CHECK_ENABLED
-    value: "true"
-  - name: NATS_SKIP_TLS_VERIFY
-    value: "false"
-  - name: NATS_CLIENT_CONNECT_URI
-    value: "tls://codemie-nats.$(CODEMIE_DOMAIN):30422"
-  - name: NATS_SERVERS_URI
-    valueFrom:
-      secretKeyRef:
-        name: codemie-nats-secrets
-        key: NATS_URL
-  - name: NATS_USER
-    valueFrom:
-      secretKeyRef:
-        name: codemie-nats-secrets
-        key: CODEMIE_USERNAME
-  - name: NATS_PASSWORD
-    valueFrom:
-      secretKeyRef:
-        name: codemie-nats-secrets
-        key: CODEMIE_PASSWORD
   - name: API_ROOT_PATH
     value: "/code-assistant-api"
   - name: AMNA_AIRN_PRECREATE_WORKFLOWS
@@ -86,6 +64,10 @@ extraEnv:
     value: "false"
   - name: MERMAID_SERVER_URL
     value: "http://mermaid-server:8000"
+  # Enables triggering CodeMie resources from outside via WebHook mechanism
+  - name: TRIGGER_ENGINE_ENABLED
+    value: "true"
+
   - name: POSTGRES_PASSWORD
     valueFrom:
       secretKeyRef:
@@ -108,6 +90,22 @@ extraEnv:
         key: db-name
   - name: PG_URL
     value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)"
+
+  - name: REDIS_HOST
+    valueFrom:
+      secretKeyRef:
+        name: codemie-cache
+        key: endpoint
+
+  - name: REDIS_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: codemie-cache
+        key: secret
+  - name: REDIS_SSL
+    value: "true"
+  - name: REDIS_SSL_CERT_REQS
+    value: "required"
 
   - name: LLM_REQUEST_ADD_MARKDOWN_PROMPT
     value: "false"
@@ -144,12 +142,6 @@ customEnv:
   - name: 'ELASTIC_URL'
     value: "https://elasticsearch-master.elastic.svc.cluster.local:9200"
 
-
-# TODO: Check for the necessity
-#
-#    - name: 'KEYCLOAK_LOGOUT_URL'
-#      value: 'https://codemie.$(CODEMIE_DOMAIN)/oauth2/sign_out?rd=/oauth2/sign_in'
-
 externalSecrets:
   enabled: false
 
@@ -175,14 +167,6 @@ service:
 ingress:
   enabled: true
   ingressClassName: nginx
-  annotations:
-    nginx.ingress.kubernetes.io/auth-response-headers: null
-    nginx.ingress.kubernetes.io/auth-signin: null
-    nginx.ingress.kubernetes.io/auth-url: null
-    nginx.ingress.kubernetes.io/rewrite-target: /$1
-    nginx.ingress.kubernetes.io/proxy-body-size: 900m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-buffer-size: "64k"
   pathType: ImplementationSpecific
   path: "/code-assistant-api/(.*)"
   tls: []
@@ -262,13 +246,6 @@ extraVolumeMounts: |
     mountPath: /app/config/llms/llm-amnaairn-config.yaml
     subPath: llm-amnaairn-config.yaml
 
-# #########################################################
-# #     Test Mate: uncomment according the official guide
-# #########################################################
-#    - name: codemie-authorized-applications
-#      mountPath: /app/config/authorized_applications/authorized-applications-config.yaml
-#      subPath: authorized-applications-config.yaml
-
 extraVolumes: |
   - name: codemie-ui
     emptyDir: {}
@@ -282,13 +259,6 @@ extraVolumes: |
     configMap:
       name: codemie-llm-customer-config
 
-# #########################################################
-# #     Test Mate: uncomment according the official guide
-# #########################################################
-#    - name: codemie-authorized-applications
-#      configMap:
-#        name: codemie-authorized-applications
-
 codemieuiProvider:
   enabled: false
 
@@ -297,26 +267,6 @@ dynamicMode:
 
 # -- Array of extra K8s manifests to deploy
 extraObjects:
-# #########################################################
-# #     Test Mate: uncomment according the official guide
-# #########################################################
-#      - apiVersion: v1
-#        kind: ConfigMap
-#        metadata:
-#          name: codemie-authorized-applications
-#        data:
-#          authorized-applications-config.yaml: |
-#            authorized_applications:
-#              - name: service-account-aitestmate
-################ <k8s namespace> do not forgot replace it ################
-#                public_key_url: http://aitestmate-nginx.<k8s namespace>.svc.cluster.local/api/public-key
-#                allowed_resources:
-#                  - datasource
-#              - name: aitestmate
-################ <k8s namespace> do not forgot replace it ################
-#                public_key_url: http://aitestmate-nginx.<k8s namespace>.svc.cluster.local/api/public-key
-#                allowed_resources:
-#                  - datasource
   - apiVersion: v1
     kind: ConfigMap
     metadata:
@@ -420,31 +370,6 @@ extraObjects:
           - id: "vendorIntegrationAWS"
             settings:
               enabled: true
-          # #########################################################
-          # #     Test Mate: uncomment according the official guide
-          # #########################################################
-          #- id: "applications:test-mate"
-          #  settings:
-          #    enabled: true
-          #    name: "AI TestMate"
-          #    url: "/aitestmate"
-          #    type: "link"
-          #    description: "Autonomous GenAI solution that automatically generates and commits unit tests, increasing coverage and reducing team effort in software development."
-          #    created_by: "EPAM"
-          #    icon_url: "https://static.cdn.epam.com/uploads/4e9e888a2fff48ea970beb06bbfd9c72/EPM-EAG/ai_testmate_logo_small.png"
-          # #########################################################
-          # #     AICE: uncomment according the official guide
-          # #########################################################
-          #- id: "applications:aice"
-          #  settings:
-          #    enabled: true
-          #    name: "AICE"
-          #    url: "/aice"
-          #    type: "iframe"
-          #    description: "Advanced code analysis and exploration solution within the EPAM AI/Run platform."
-          #    created_by: "AICE Team"
-          #    icon_url: "https://raw.githubusercontent.com/alk-epam/test-repo/7f9196e4f37ff576f26cda782d785a3941bfce8c/aice.svg"
-              
         preconfigured_assistants:
           - id: "prompt-engineer"
             settings:
@@ -499,11 +424,5 @@ extraObjects:
             settings:
               enabled: true
           - id: "amna-aws-waf-agent"
-            settings:
-              enabled: true
-          - id: "amna-aice-java-dev-migration-assistant"
-            settings:
-              enabled: true
-          - id: "amna-aice-java-mason-migration-assistant"
             settings:
               enabled: true
