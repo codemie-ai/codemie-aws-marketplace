@@ -72,12 +72,8 @@ data "aws_iam_policy_document" "ai_run_bedrock_policy" {
       "bedrock:CountTokens",
     ]
     resources = [
-      "arn:aws:bedrock:*:*:inference-profile/us.anthropic.*",
-      "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.*",
-      "arn:aws:bedrock:*:*:inference-profile/ap.anthropic.*",
-      "arn:aws:bedrock:*:*:inference-profile/global.anthropic.*",
-      "arn:aws:bedrock:*:*:inference-profile/jp.anthropic.*",
-      "arn:aws:bedrock:*:*:inference-profile/au.anthropic.*",
+      "arn:aws:bedrock:*:*:inference-profile/*.amazon.*",
+      "arn:aws:bedrock:*:*:inference-profile/*.anthropic.*",
       "arn:aws:bedrock:*:*:inference-profile/qwen.*",
       "arn:aws:bedrock:*:*:inference-profile/moonshotai.*"
     ]

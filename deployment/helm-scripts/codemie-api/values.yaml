@@ -275,7 +275,7 @@ extraObjects:
       llm-amnaairn-config.yaml: |
         llm_models:
           - base_name: "amazon-nova-pro"
-            deployment_name: "amazon.nova-pro-v1:0"
+            deployment_name: "us.amazon.nova-pro-v1:0"
             label: "Bedrock Nova Pro"
             multimodal: true
             default: true
