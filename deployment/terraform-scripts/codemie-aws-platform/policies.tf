@@ -74,6 +74,7 @@ data "aws_iam_policy_document" "ai_run_bedrock_policy" {
     resources = [
       "arn:aws:bedrock:*:*:inference-profile/*.amazon.*",
       "arn:aws:bedrock:*:*:inference-profile/*.anthropic.*",
+      "arn:aws:bedrock:*:*:inference-profile/openai.*",
       "arn:aws:bedrock:*:*:inference-profile/qwen.*",
       "arn:aws:bedrock:*:*:inference-profile/moonshotai.*"
     ]
